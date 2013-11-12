@@ -1,88 +1,74 @@
 #!/usr/bin/ruby
 
+
 require 'csv'
-require 'nokogiri'
 require './round_half_even'
+require 'xmlsimple'
+
 
 FILE_TRANS = "TRANS.csv"
 FILE_RATES = "RATES.xml"
 FILE_OUTPUT = "OUTPUT.txt"
 
-puts "Enter an item: "
-item = gets.chomp
+def get_rates
+  # create a conversion hash of each currency to USD
+  xml_hash = XmlSimple.xml_in(FILE_RATES)
+  xml_array = xml_hash["rate"]
 
-def read_xml(file_name) 
-  file_handle = open(file_name)
-  xml = Nokogiri::XML(file_handle)
-  rates = xml.search("rate")
-  return rates
-end
-
-def get_conversion(currency, amount, old_from="none", old_to="none")
-  old_from = currency
-  rates = read_xml(FILE_RATES)
-  return amount if currency == "USD" 
-  
-  rates.each do |rate|
-    new_currency = rate.at("to").content
-    old_to = new_currency
-      conversion = rate.at("conversion").content.to_f
-      new_amount = (amount * conversion).round_half_even
-      #puts "FROM #{rate.at("from").content} TO #{rate.at("to").content} old_from #{old_from} old_to #{old_to}"
-    if rate.at("from").content == currency && new_currency != old_to && currency != old_from
-      return get_conversion(new_currency, new_amount, old_from, old_to)
-    elsif rate.at("to").content == "USD"
-      #puts "^^ #{rate.content}"
-      return new_amount
-#    else
-#      return get_conversion(new_currency, new_amount, old_from, old_to)
-    end
+  # build the Hash  with empty rates
+  rates_to_usd = Hash.new
+  xml_array.each do |i|
+    rates_to_usd[i["from"].to_s.tr('^A-Za-z', '')] = 0
+    rates_to_usd[i["to"].to_s.tr('^A-Za-z', '')] = 0
   end
 
+  # search for conversions to USD
+  to_usd = xml_hash["rate"].select{|k| k["to"] == ["USD"]}
 
-#  rates.each do |rate|
-#    if rate.at("from").content == currency && rate.at("to").content == "USD" 
-#      new_currency = rate.at("to").content 
-#    else
-#      new_currency = rate.at("to").content 
-#    end
-#    puts "#{new_currency}"
-#    conversion = rate.at("conversion").content.to_f    
-#    new_amount = (amount * conversion).round_half_even
+  # create a new array to build to
+  # rates_to_usd[currency] = conversion_to_usd
+  currency = to_usd.find{|k| k["to"] == ["USD"]}["from"].to_s.tr('^A-Za-z', '')
+  conversion = to_usd.find{|k| k["to"] == ["USD"]}["conversion"].to_s.tr('^0-9.', '').to_f
+  rates_to_usd[currency] = conversion
 
-#    if new_currency != "USD" 
-#      return get_conversion(new_currency, new_amount, old_currency) 
-#    elsif new_currency == "USD" 
-#      return new_amount
-#    end
-#  end
+  # add the USD to USD conversion
+  rates_to_usd["USD"] = 1
 
+  # search for empty rates
+  rates_to_usd.select{|key, hash| hash == 0 }.each do |key,value|
+    rate_array = xml_hash["rate"].select{|k| k["from"] == [key]}
+    rate_array.each do |i|
+      from = i["from"].to_s.tr('^A-Za-z', '')
+      to   = i["to"].to_s.tr('^A-Za-z', '') 
+      conversion = i["conversion"].to_s.tr('^0-9.', '').to_f
+      # find "to" conversion to USD
+      if rates_to_usd[to] > 0 && !rates_to_usd[to].nil? 
+        rates_to_usd[from] = conversion * rates_to_usd[to]
+      end  
+    end
+  end
+  
+  return rates_to_usd
 end
 
 def get_total(file_name, item)
-  id = 0
+  rates_hash = get_rates
   total_amount = 0.0
   
   CSV.foreach(File.path(file_name), :headers => true, :header_converters => :symbol, :converters => :all) do |row|
-    id = id + 1
     row[2] = row[2].split
     currency = row[2][1]
     amount = row[2][0].to_f
-
+    
     if row[1] == item
-      total_amount = total_amount + get_conversion(currency, amount)
+      total_amount = total_amount + amount * rates_hash[currency]
       total_amount = total_amount.round_half_even
-      #puts "#{row[0]} item #{row[1]} amount #{amount} currency #{currency} total_amount #{total_amount}"
     end
-    #items[id] = Hash[row.headers[0..-1].zip(row.fields[0..-1])]
   end
   File.open(FILE_OUTPUT, 'w') { |file| file.write(total_amount) }
   return total_amount.round_half_even
-  #return items.to_s
 end
 
-
-
-#puts "Start"
+puts "Enter an item: "
+item = gets.chomp
 puts data = get_total(FILE_TRANS, item)
-#puts "End"
